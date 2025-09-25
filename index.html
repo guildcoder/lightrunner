@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lightrunner</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+html,body{margin:0;padding:0;overflow:hidden;height:100%;background:black;font-family:'Share Tech Mono', monospace;}
+canvas{display:block;}
+#menu{
+  position:absolute;top:0;left:0;width:100%;height:100%;
+  display:flex;flex-direction:column;justify-content:center;align-items:center;
+  background: rgba(0,0,0,0.85); z-index:10;color:white;
+}
+#menu input,#menu select,#menu button{
+  margin:8px;padding:12px;font-size:18px;
+  background:#111;border:2px solid cyan;color:white;border-radius:6px;
+  text-shadow:0 0 5px cyan;
+  cursor:pointer;transition:0.2s;
+}
+#menu input:focus,#menu select:focus,#menu button:hover{
+  border-color:#0ff;text-shadow:0 0 10px #0ff;outline:none;
+}
+#title{
+  font-size:72px;color:cyan;font-weight:bold;
+  animation:bob 1.5s infinite alternate;
+  margin-bottom:20px;
+  text-shadow:0 0 15px cyan,0 0 30px cyan;
+}
+@keyframes bob{0%{transform:translateY(0px);}100%{transform:translateY(20px);}}
+#hud{position:absolute;top:10px;left:10px;color:white;font-weight:bold;font-size:20px;z-index:5;}
+</style>
+</head>
+<body>
+<div id="menu">
+  <div id="title">Lightrunner</div>
+  <input id="playerName" placeholder="Enter your name" maxlength="12"/>
+  <select id="bikeColor">
+    <option value="cyan">Cyan</option>
+    <option value="magenta">Magenta</option>
+    <option value="yellow">Yellow</option>
+    <option value="lime">Lime</option>
+    <option value="blue">Blue</option>
+    <option value="red">Red</option>
+    <option value="green">Green</option>
+  </select>
+  <button id="startBtn">Run!</button>
+  <div style="margin-top:10px;font-size:14px;opacity:0.8;">
+    Controls: WASD to move, Space to throw disc
+  </div>
+</div>
+<div id="hud"></div>
+<canvas id="gameCanvas"></canvas>
+
+<script>
+const canvas=document.getElementById('gameCanvas');
+const ctx=canvas.getContext('2d');
+let width=canvas.width=window.innerWidth;
+let height=canvas.height=window.innerHeight;
+const hud=document.getElementById('hud');
+
+let gameRunning=false;
+let distance=0,score=0;
+const GRAVITY=0.5;
+const PLAYER_SPEED=6, BOT_BASE_SPEED=4;
+const TILE_SIZE=200, TILE_LOOKAHEAD=8;
+
+let player,bots=[],projectiles=[],tiles=[],trails=[],discs=[];
+let keys={w:false,a:false,s:false,d:false,space:false};
+
+// --- Classes ---
+class Bike{
+  constructor(x,y,color,name,isBot=false){
+    this.x=x; this.y=y; this.z=0; this.color=color; this.name=name;
+    this.isBot=isBot; this.alive=true; this.ammo=0; this.vy=0; this.onGround=true;
+    this.trail=[];
+  }
+  move(){
+    if(!this.alive)return;
+    // Gravity
+    this.z+=this.vy;
+    this.vy+=GRAVITY;
+    if(this.z>=0){this.z=0; this.vy=0; this.onGround=true;}else this.onGround=false;
+
+    // Player input
+    if(!this.isBot){
+      if(keys.w)this.y-=PLAYER_SPEED;
+      if(keys.s)this.y+=PLAYER_SPEED;
+      if(keys.a)this.x-=PLAYER_SPEED;
+      if(keys.d)this.x+=PLAYER_SPEED;
+      if(keys.space && this.onGround){this.vy=-12; this.onGround=false; keys.space=false;}
+    }else{
+      // Bot AI
+      if(player){
+        let dx=player.x-this.x,dy=player.y-this.y;
+        let speed=BOT_BASE_SPEED+distance/500;
+        this.x+=Math.sign(dx)*Math.min(Math.abs(dx),speed*0.5);
+        this.y+=Math.sign(dy)*Math.min(Math.abs(dy),speed);
+        if(this.onGround && Math.random()<0.01)this.vy=-10; // jump randomly
+      }
+    }
+
+    // Leave trail
+    this.trail.push({x:this.x,y:this.y,z:this.z});
+    if(this.trail.length>150)this.trail.shift();
+    trails.push({x:this.x,y:this.y,z:this.z,color:this.color});
+    if(trails.length>2000)trails.shift();
+  }
+  draw(){
+    if(!this.alive)return;
+    ctx.shadowBlur=15; ctx.shadowColor=this.color;
+    let tiltX=(this.x-width/2)/width*20;
+    let screenY=this.y-this.z;
+    ctx.fillStyle=this.color;
+    ctx.fillRect(this.x-15-tiltX,screenY-30,30,60);
+    ctx.shadowBlur=0;
+  }
+}
+
+class Tile{
+  constructor(type){this.type=type; this.y=tiles.length*TILE_SIZE; this.height=TILE_SIZE; this.x=0; this.z=0; this.w=width;}
+  draw(){
+    ctx.fillStyle='rgba(0,255,255,0.05)';
+    ctx.fillRect(0,this.y-this.z,width,this.height);
+  }
+}
+
+class Disc{
+  constructor(){this.x=Math.random()*width; this.y=player.y-Math.random()*1000-200; this.radius=8;}
+  draw(){ctx.shadowBlur=10;ctx.shadowColor='white';ctx.fillStyle='white';ctx.beginPath();ctx.arc(this.x,this.y-this.z,this.radius,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;}
+}
+
+// --- Game Functions ---
+function startGame(name,color){
+  gameRunning=true;
+  player=new Bike(width/2,height-100,color,name);
+  bots=[];projectiles=[];tiles=[];trails=[];discs=[];
+  distance=0;score=0;
+  for(let i=0;i<TILE_LOOKAHEAD;i++)tiles.push(new Tile('flat'));
+  loop();
+}
+
+function generateTile(){
+  // Random tile type: flat, ramp up, ramp down
+  let types=['flat','rampUp','rampDown','curveLeft','curveRight'];
+  let type=types[Math.floor(Math.random()*types.length)];
+  tiles.push(new Tile(type));
+  if(Math.random()<0.3)discs.push(new Disc());
+}
+
+function update(){
+  if(!player.alive)return;
+
+  player.move();
+  bots.forEach(b=>b.move());
+
+  // Collect discs
+  discs.forEach((d,i)=>{
+    if(Math.abs(player.x-d.x)<20 && Math.abs(player.y-d.y)<20){player.ammo++;discs.splice(i,1);}
+  });
+
+  // Update projectiles
+  projectiles.forEach((p,i)=>{
+    p.y-=10;
+    if(Math.abs(p.x-player.x)<20 && Math.abs(p.y-player.y)<40){projectiles.splice(i,1);}
+  });
+
+  // Distance & score
+  distance+=PLAYER_SPEED;
+  score=Math.floor(distance/10);
+
+  // Generate new tiles
+  if(tiles.length<TILE_LOOKAHEAD)generateTile();
+}
+
+function draw(){
+  ctx.clearRect(0,0,width,height);
+
+  // Draw tiles
+  tiles.forEach(t=>t.draw());
+
+  // Draw trails
+  trails.forEach(t=>{
+    let screenY=t.y-t.z;
+    ctx.fillStyle=t.color;
+    ctx.fillRect(t.x-2,screenY-2,4,4);
+  });
+
+  // Draw discs
+  discs.forEach(d=>d.draw());
+
+  // Draw bikes
+  if(player)player.draw();
+  bots.forEach(b=>b.draw());
+
+  hud.innerText=`Score: ${score} | Ammo: ${player?player.ammo:0}`;
+}
+
+function loop(){
+  if(!gameRunning)return;
+  requestAnimationFrame(loop);
+  update();
+  draw();
+}
+
+// --- Input ---
+document.addEventListener('keydown',e=>{
+  if(e.key==='w')keys.w=true;
+  if(e.key==='a')keys.a=true;
+  if(e.key==='s')keys.s=true;
+  if(e.key==='d')keys.d=true;
+  if(e.key===' ')keys.space=true;
+});
+document.addEventListener('keyup',e=>{
+  if(e.key==='w')keys.w=false;
+  if(e.key==='a')keys.a=false;
+  if(e.key==='s')keys.s=false;
+  if(e.key==='d')keys.d=false;
+  if(e.key===' ')keys.space=false;
+});
+
+// --- Start button ---
+const startBtn=document.getElementById('startBtn');
+startBtn.addEventListener('click',()=>{
+  const name=document.getElementById('playerName').value||'Runner';
+  const color=document.getElementById('bikeColor').value||'cyan';
+  document.getElementById('menu').style.display='none';
+  startGame(name,color);
+});
+
+window.addEventListener('resize',()=>{width=canvas.width=window.innerWidth;height=canvas.height=window.innerHeight;});
+</script>
+</body>
+</html>
