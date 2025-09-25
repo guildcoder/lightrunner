@@ -41,7 +41,9 @@ const player = {
 };
 
 const bots = [];
+const bombs = [];
 const trails = []; // global trail "walls"
+let knockbackTimer = 0;
 
 // === CONTROLS ===
 canvas.addEventListener("click", (e)=>{
@@ -115,6 +117,8 @@ function spawnBot(){
 function updateBots(){
   bots.forEach(bot=>{
     if(!bot.alive) return;
+
+    bot.y += (knockbackTimer>0? 2 : 6);
     if(bot.x < player.x) bot.x += 2;
     if(bot.x > player.x) bot.x -= 2;
 
@@ -129,6 +133,7 @@ function updateBots(){
       const dy = bot.y - t.y;
       if(Math.sqrt(dx*dx+dy*dy) < 12){
         bot.alive = false;
+        bombs.push({x:bot.x, y:bot.y, size:20, active:true});
         break;
       }
     }
@@ -137,6 +142,7 @@ function updateBots(){
   // cleanup offscreen
   for(let i=bots.length-1;i>=0;i--){
     if(bots[i].y>canvas.height){
+      bombs.push({x:bots[i].x, y:bots[i].y, size:20, active:true});
       bots.splice(i,1);
     }
   }
@@ -150,6 +156,15 @@ function drawBots(){
   });
 }
 
+// === BOMBS ===
+function drawBombs(){
+  bombs.forEach(b=>{
+    ctx.fillStyle="orange";
+    ctx.beginPath();
+    ctx.arc(b.x,b.y,b.size,0,Math.PI*2);
+    ctx.fill();
+  });
+}
 
 // === COLLISIONS ===
 function checkTrailCollision(){
@@ -170,6 +185,9 @@ function drawHUD(){
   ctx.fillStyle="white";
   ctx.font="24px Arial";
   ctx.fillText(`Score: ${score}`,20,40);
+  if(knockbackTimer>0){
+    ctx.fillStyle="yellow";
+    ctx.fillText("KNOCKBACK ACTIVE!", canvas.width/2-100, 40);
   }
 }
 
@@ -192,10 +210,12 @@ function gameLoop(){
 
   updateBots();
   drawBots();
+  drawBombs();
   checkTrailCollision();
 
   drawHUD();
   score++;
+  if(knockbackTimer>0) knockbackTimer--;
 
   requestAnimationFrame(gameLoop);
 }
