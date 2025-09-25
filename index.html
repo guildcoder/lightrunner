@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Tron Temple Run</title>
+<title>L I G H T R U N N E R</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
 html,body{margin:0;padding:0;overflow:hidden;height:100%;background:black;font-family:'Share Tech Mono', monospace;}
@@ -64,6 +64,7 @@ let gameRunning=false;
 let distance=0,score=0,speed=8;
 const GRAVITY=0.8;
 const LANE_COUNT=3,LANE_WIDTH=width/6;
+const BOT_START_DELAY=500; // distance before bots appear
 
 let player,bots=[],obstacles=[],projectiles=[],keys={a:false,d:false,w:false,s:false,space:false};
 
@@ -80,6 +81,7 @@ class Bike{
   laneToX(lane){return width/2 + (lane-1)*LANE_WIDTH;}
   move(){
     if(!this.alive)return;
+
     // Forward movement
     if(!this.isBot){
       if(keys.w)this.z += speed;
@@ -89,6 +91,7 @@ class Bike{
       this.x=this.laneToX(this.lane);
       if(keys.space && this.onGround){this.vy=-15; this.onGround=false; keys.space=false;}
     } else {
+      if(distance<BOT_START_DELAY) return; // Wait before chasing
       // AI chasing player
       if(this.z < player.z + 200)this.z += speed*0.9;
       if(this.lane < player.lane)this.lane++;
@@ -117,10 +120,22 @@ class Bike{
   }
   draw(){
     let scale = 1 + ((this.z-player.z)/1000);
+
+    // Draw rectangle base
+    let rectHeight = 30*scale, rectWidth = 20*scale;
+    let rectX = this.x - rectWidth/2;
+    let rectY = this.y - ((this.z-player.z)/5) - rectHeight;
+
     ctx.fillStyle=this.color;
-    ctx.shadowBlur=20; ctx.shadowColor=this.color;
+    ctx.shadowBlur=15; ctx.shadowColor=this.color;
+    ctx.fillRect(rectX,rectY,rectWidth,rectHeight);
+
+    // Draw forward-pointing triangle on top
     ctx.beginPath();
-    ctx.arc(this.x,this.y - ((this.z-player.z)/5),20*scale,0,Math.PI*2);
+    ctx.moveTo(this.x, rectY - 20*scale);
+    ctx.lineTo(this.x - rectWidth/2, rectY);
+    ctx.lineTo(this.x + rectWidth/2, rectY);
+    ctx.closePath();
     ctx.fill();
     ctx.shadowBlur=0;
   }
