@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Lightrunner</title>
+<title>Tron Temple Run</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
 html,body{margin:0;padding:0;overflow:hidden;height:100%;background:black;font-family:'Share Tech Mono', monospace;}
@@ -34,7 +34,7 @@ canvas{display:block;}
 </head>
 <body>
 <div id="menu">
-  <div id="title">Lightrunner</div>
+  <div id="title">Tron Temple Run</div>
   <input id="playerName" placeholder="Enter your name" maxlength="12"/>
   <select id="bikeColor">
     <option value="cyan">Cyan</option>
@@ -47,7 +47,7 @@ canvas{display:block;}
   </select>
   <button id="startBtn">Run!</button>
   <div style="margin-top:10px;font-size:14px;opacity:0.8;">
-    Controls: WASD to move, Space to jump
+    Controls: A/D to change lane, W/S to speed up/slow down, Space to jump
   </div>
 </div>
 <div id="hud"></div>
@@ -61,183 +61,151 @@ let height=canvas.height=window.innerHeight;
 const hud=document.getElementById('hud');
 
 let gameRunning=false;
-let distance=0,score=0;
-const GRAVITY=0.5;
-const PLAYER_SPEED=6, BOT_BASE_SPEED=4;
-const TILE_SIZE=200, TILE_LOOKAHEAD=8;
+let distance=0,score=0,speed=8;
+const GRAVITY=0.8;
+const LANE_COUNT=3,LANE_WIDTH=width/6;
 
-let player,bots=[],trails=[],tiles=[],discs=[];
-let keys={w:false,a:false,s:false,d:false,space:false};
+let player,bots=[],obstacles=[],projectiles=[],keys={a:false,d:false,w:false,s:false,space:false};
 
 // --- Classes ---
 class Bike{
-  constructor(x,y,color,name,isBot=false){
-    this.x=x; this.y=y; this.z=0; this.color=color; this.name=name;
-    this.isBot=isBot; this.alive=true; this.ammo=0; this.vy=0; this.onGround=true;
-    this.boost=0;
-    this.trail=[];
+  constructor(lane,color,name,isBot=false){
+    this.lane=lane;
+    this.color=color; this.name=name;
+    this.isBot=isBot; this.alive=true;
+    this.y=height-150; this.x=this.laneToX(lane);
+    this.z=0; this.vy=0; this.onGround=true;
+    this.attackCooldown=0;
   }
+  laneToX(lane){return width/2 + (lane-1)*LANE_WIDTH;}
   move(){
     if(!this.alive)return;
-
-    // Boost
-    let speed=PLAYER_SPEED;
-    if(this.boost>0){speed*=1.8; this.boost--; ctx.shadowBlur=20; ctx.shadowColor='white';}
-
-    // Gravity & jump
-    this.z+=this.vy; this.vy+=GRAVITY;
-    if(this.z>=0){this.z=0; this.vy=0; this.onGround=true;}else this.onGround=false;
-
-    // Input / AI
+    // Forward movement
     if(!this.isBot){
-      if(keys.w)this.y-=speed;
-      if(keys.s)this.y+=speed;
-      if(keys.a)this.x-=speed;
-      if(keys.d)this.x+=speed;
-      if(keys.space && this.onGround){this.vy=-12; this.onGround=false; keys.space=false;}
-    }else{
-      if(player){
-        let dx=player.x-this.x,dy=player.y-this.y;
-        let s=BOT_BASE_SPEED+(distance/500);
-        if(this.boost>0)s*=1.5;
-        this.x+=Math.sign(dx)*Math.min(Math.abs(dx),s*0.5);
-        this.y+=Math.sign(dy)*Math.min(Math.abs(dy),s);
-        if(this.onGround && Math.random()<0.01)this.vy=-10;
+      if(keys.w)this.z += speed;
+      if(keys.s)this.z -= speed*0.7;
+      if(keys.a && this.lane>0)this.lane--; 
+      if(keys.d && this.lane<LANE_COUNT-1)this.lane++;
+      this.x=this.laneToX(this.lane);
+      if(keys.space && this.onGround){this.vy=-15; this.onGround=false; keys.space=false;}
+    } else {
+      // AI chasing player
+      if(this.z < player.z + 200)this.z += speed*0.9;
+      if(this.lane < player.lane)this.lane++;
+      else if(this.lane > player.lane)this.lane--;
+      this.x=this.laneToX(this.lane);
+
+      // Fire projectile occasionally
+      if(this.attackCooldown<=0 && Math.random()<0.01){
+        projectiles.push(new Projectile(this.x,this.y-50,this.z+50,this.color,false));
+        this.attackCooldown = 100;
       }
+      this.attackCooldown--;
     }
 
-    // Trail & collision
-    this.trail.push({x:this.x,y:this.y,z:this.z});
-    if(this.trail.length>150)this.trail.shift();
-    trails.push({x:this.x,y:this.y,z:this.z,color:this.color});
-    if(trails.length>2000)trails.shift();
+    // Jump & gravity
+    this.y += this.vy;
+    this.vy += GRAVITY;
+    if(this.y>=height-150){this.y=height-150; this.vy=0; this.onGround=true;}
 
-    this.checkCollision();
-  }
-  checkCollision(){
-    // Trail collision
-    for(let t of trails){
-      if(t===this)continue;
-      if(Math.abs(this.x-t.x)<15 && Math.abs(this.y-t.y)<15 && Math.abs(this.z-t.z)<10){
-        this.alive=false;
-        return;
+    // Collision with obstacles
+    obstacles.forEach(obs=>{
+      if(this.lane===obs.lane && Math.abs(this.z-obs.z)<50 && this.y>=height-150-obs.height){
+        if(!this.isBot)this.alive=false;
       }
-    }
-    // Tile boost
-    for(let t of tiles){
-      if(this.y>t.y && this.y<t.y+t.height){
-        if(t.isBoost){this.boost=10;}
-      }
-    }
+    });
   }
-  draw(cameraX,cameraY,cameraZ){
-    if(!this.alive)return;
-    let tiltX = (this.x - player.x)/width*20;
-    let screenX = this.x - cameraX - tiltX;
-    let screenY = this.y - cameraY - this.z + cameraZ;
-    ctx.shadowBlur=15; ctx.shadowColor=this.color;
+  draw(){
+    let scale = 1 + ((this.z-player.z)/1000);
     ctx.fillStyle=this.color;
-    ctx.fillRect(screenX-15,screenY-30,30,60);
-    ctx.shadowBlur=0;
-  }
-}
-
-class Tile{
-  constructor(type){
-    this.type=type;
-    this.y=tiles.length*TILE_SIZE;
-    this.height=TILE_SIZE;
-    this.isBoost=Math.random()<0.2;
-  }
-  draw(cameraY,cameraZ){
-    let screenY = this.y - cameraY - cameraZ;
-    if(screenY+this.height<0 || screenY>height)return;
-    ctx.fillStyle=this.isBoost?'rgba(0,255,255,0.2)':'rgba(0,255,255,0.05)';
-    ctx.fillRect(0,screenY,width,this.height);
-  }
-}
-
-class Disc{
-  constructor(){
-    this.x=Math.random()*width;
-    this.y=player.y-Math.random()*1000-200;
-    this.radius=8;
-  }
-  draw(cameraX,cameraY,cameraZ){
-    let screenX = this.x - cameraX;
-    let screenY = this.y - cameraY - cameraZ;
-    ctx.shadowBlur=10; ctx.shadowColor='white';
-    ctx.fillStyle='white';
+    ctx.shadowBlur=20; ctx.shadowColor=this.color;
     ctx.beginPath();
-    ctx.arc(screenX,screenY,this.radius,0,Math.PI*2);
+    ctx.arc(this.x,this.y - ((this.z-player.z)/5),20*scale,0,Math.PI*2);
     ctx.fill();
     ctx.shadowBlur=0;
   }
 }
 
+class Obstacle{
+  constructor(lane,z){
+    this.lane=lane; this.z=z;
+    this.height=60;
+    this.width=LANE_WIDTH*0.8;
+  }
+  draw(){
+    let screenY = height - 150 - ((this.z - player.z)/5);
+    ctx.fillStyle='red';
+    ctx.fillRect(width/2 + (this.lane-1)*LANE_WIDTH - this.width/2,screenY - this.height,this.width,this.height);
+  }
+}
+
+class Projectile{
+  constructor(x,y,z,color,playerShot){
+    this.x=x; this.y=y; this.z=z; this.color=color; this.playerShot=playerShot;
+  }
+  move(){this.z += this.playerShot?speed*2:-speed*2;}
+  draw(){
+    let screenY = this.y - ((this.z - player.z)/5);
+    ctx.fillStyle=this.color;
+    ctx.beginPath();
+    ctx.arc(this.x,screenY,8,0,Math.PI*2);
+    ctx.fill();
+  }
+  checkCollision(){
+    if(!player.alive)return;
+    if(!this.playerShot && Math.abs(this.z-player.z)<20 && Math.abs(this.x-player.x)<30){
+      player.alive=false;
+    }
+  }
+}
+
 // --- Game Functions ---
 function startGame(name,color){
-  gameRunning=true;
-  player=new Bike(width/2,height-100,color,name);
-  bots=[];trails=[];tiles=[];discs=[];
-  distance=0;score=0;
-  for(let i=0;i<TILE_LOOKAHEAD;i++)tiles.push(new Tile('flat'));
+  gameRunning=true; distance=0;score=0; speed=8;
+  player=new Bike(1,color,name,false);
+  bots=[new Bike(0,'red','Bot1',true), new Bike(2,'magenta','Bot2',true)];
+  obstacles=[]; projectiles=[];
   loop();
 }
 
-function generateTile(){
-  let types=['flat','rampUp','rampDown','curveLeft','curveRight'];
-  let type=types[Math.floor(Math.random()*types.length)];
-  tiles.push(new Tile(type));
-  if(Math.random()<0.3)discs.push(new Disc());
+function generateObstacles(){
+  if(Math.random()<0.02){
+    let lane=Math.floor(Math.random()*LANE_COUNT);
+    obstacles.push(new Obstacle(lane,player.z + 800 + Math.random()*400));
+  }
 }
 
 function update(){
   if(!player.alive)return;
-
   player.move();
   bots.forEach(b=>b.move());
-
-  // Collect discs
-  discs.forEach((d,i)=>{
-    if(Math.abs(player.x-d.x)<20 && Math.abs(player.y-d.y)<20){player.ammo++;discs.splice(i,1);}
-  });
-
-  // Distance & score
-  distance+=PLAYER_SPEED;
+  projectiles.forEach(p=>{p.move(); p.checkCollision();});
+  distance += speed;
   score=Math.floor(distance/10);
-
-  // Generate new tiles
-  if(tiles.length<TILE_LOOKAHEAD)generateTile();
+  speed += 0.0005; // Gradually increase speed
+  generateObstacles();
 }
 
 function draw(){
   ctx.clearRect(0,0,width,height);
 
-  // Camera
-  let cameraX = player.x - width/2;
-  let cameraY = player.y - height*0.6;
-  let cameraZ = player.z*0.5;
+  // Draw lanes
+  for(let lane=0; lane<LANE_COUNT; lane++){
+    ctx.fillStyle=lane===1?'rgba(0,255,255,0.1)':'rgba(255,255,255,0.05)';
+    ctx.fillRect(width/2 + (lane-1)*LANE_WIDTH - LANE_WIDTH/2,0,LANE_WIDTH,height);
+  }
 
-  // Draw tiles
-  tiles.forEach(t=>t.draw(cameraY,cameraZ));
+  // Draw obstacles
+  obstacles.forEach(obs=>obs.draw());
 
-  // Draw trails
-  trails.forEach(t=>{
-    let screenX = t.x - cameraX;
-    let screenY = t.y - cameraY - t.z + cameraZ;
-    ctx.fillStyle=t.color;
-    ctx.fillRect(screenX-2,screenY-2,4,4);
-  });
-
-  // Draw discs
-  discs.forEach(d=>d.draw(cameraX,cameraY,cameraZ));
+  // Draw projectiles
+  projectiles.forEach(p=>p.draw());
 
   // Draw bikes
-  if(player)player.draw(cameraX,cameraY,cameraZ);
-  bots.forEach(b=>b.draw(cameraX,cameraY,cameraZ));
+  player.draw();
+  bots.forEach(b=>b.draw());
 
-  hud.innerText=`Score: ${score} | Ammo: ${player?player.ammo:0}`;
+  hud.innerText=`Score: ${score}`;
 }
 
 function loop(){
@@ -249,23 +217,22 @@ function loop(){
 
 // --- Input ---
 document.addEventListener('keydown',e=>{
-  if(e.key==='w')keys.w=true;
   if(e.key==='a')keys.a=true;
-  if(e.key==='s')keys.s=true;
   if(e.key==='d')keys.d=true;
+  if(e.key==='w')keys.w=true;
+  if(e.key==='s')keys.s=true;
   if(e.key===' ')keys.space=true;
 });
 document.addEventListener('keyup',e=>{
-  if(e.key==='w')keys.w=false;
   if(e.key==='a')keys.a=false;
-  if(e.key==='s')keys.s=false;
   if(e.key==='d')keys.d=false;
+  if(e.key==='w')keys.w=false;
+  if(e.key==='s')keys.s=false;
   if(e.key===' ')keys.space=false;
 });
 
 // --- Start button ---
-const startBtn=document.getElementById('startBtn');
-startBtn.addEventListener('click',()=>{
+document.getElementById('startBtn').addEventListener('click',()=>{
   const name=document.getElementById('playerName').value||'Runner';
   const color=document.getElementById('bikeColor').value||'cyan';
   document.getElementById('menu').style.display='none';
