@@ -1,570 +1,274 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>L I G H T R U N N E R</title>
 <style>
-  :root{
-    --bg:#000;
-    --road:#07131a;
-    --grid: #0ff;
-    --bot: #ff1bd8;
-    --player: #00f5ff;
-    --pickup: #ffd400;
-    --ui: #fff;
-  }
-  html,body{height:100%;margin:0;background:var(--bg);-webkit-tap-highlight-color:transparent;touch-action: none;}
-  canvas{display:block;width:100vw;height:100vh;}
-  .ui {
-    position: fixed; left: 12px; top: 8px; color:var(--ui); font-family: Inter, system-ui, -apple-system, "Helvetica Neue", Arial;
-    user-select:none;
-  }
-  .ui .score { font-size:18px; font-weight:700; }
-  .ui .info { font-size:13px; opacity:0.9; margin-top:6px; }
-  .centerMsg {
-    position: fixed; left:50%; top:50%; transform:translate(-50%,-50%); color:var(--ui); text-align:center;
-  }
-  button {
-    font-size:16px; padding:10px 16px; border-radius:8px; border:none; cursor:pointer;
-    background:#0ff; color:#001; font-weight:700;
-  }
+  body { margin:0; overflow:hidden; background:black; }
+  canvas { display:block; }
 </style>
 </head>
 <body>
-<canvas id="game"></canvas>
-
-<div class="ui">
-  <div class="score" id="score">Score: 0</div>
-  <div class="info" id="ammo">Ammo: 0</div>
-  <div class="info" id="round">Round: 1</div>
-</div>
-
-<div class="centerMsg" id="centerMsg" style="display:none;">
-  <div id="msgText" style="font-size:28px;font-weight:800;margin-bottom:12px"></div>
-  <button id="restartBtn">Restart</button>
-</div>
-
+<canvas id="gameCanvas"></canvas>
 <script>
-(() => {
-  const canvas = document.getElementById('game');
-  const ctx = canvas.getContext('2d', { alpha: false });
-  let W = canvas.width = innerWidth;
-  let H = canvas.height = innerHeight;
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
 
-  // Road / horizon
-  let horizon = Math.max(120, H * 0.28);
-  const gridSpacing = 48;
+const horizon = canvas.height * 0.25;
+const gridSpacing = 60;
 
-  // State
-  let score = 0;
-  let round = 1;
-  let gameOver = false;
+// Placeholder bike sprites (replace with PNGs)
+const playerImg = new Image();
+playerImg.src = "https://dummyimage.com/40x60/ff0000/000000&text=P"; // red bike
+const botImg = new Image();
+botImg.src = "https://dummyimage.com/40x60/00ffff/000000&text=B"; // cyan bike
 
-  // Player (bigger lightcycle)
-  const player = {
-    x: W / 2,
-    y: H * 0.78,
-    width: 36,
-    height: 48,
-    color: 'var(--player)',
-    speed: 18,          // lateral step when tapping
-    turnSmoothing: 0.2,// smoothing when moving toward target x
-    targetX: W / 2,
-    ammo: 0,
-    trailX: [],        // hold recent x positions to create vertical downward trail
-    trailLen: 90,
-    trailSpacing: 2.5  // vertical pixels per trail sample
-  };
+let lastTap = 0;
+let score = 0;
+let gameOver = false;
+let botSpawnTimer = 0;
+let discSpawnTimer = 0;
 
-  // Entities
-  const bots = [];      // enemies
-  const pickups = [];   // ammo pickups
-  const projectiles = []; // discs fired by player
+const player = {
+  x: canvas.width/2,
+  y: canvas.height*0.8,
+  size: 40,
+  speed: 12,
+  color: "red",
+  discs: 0,
+  trail: []
+};
 
-  // Difficulty & spawn control
-  let botSpawnTimer = 60; // frames
-  let botSpawnInterval = 60;
-  let pickupSpawnTimer = 220;
-  let pickupSpawnInterval = 220;
-  let botBaseSpeed = 2.8;
-  let botSpeedIncrease = 0;
-  let frame = 0;
+const bots = [];
+const flyingDiscs = [];
+const bombs = [];
+const trails = []; // global trails (walls)
 
-  // Input / double-tap detection
-  let lastTap = 0;
-  let pointerId = null; // single pointer support
-  let lastPointerX = null;
+let knockbackTimer = 0;
 
-  // UI elements
-  const scoreEl = document.getElementById('score');
-  const ammoEl = document.getElementById('ammo');
-  const roundEl = document.getElementById('round');
-  const centerMsg = document.getElementById('centerMsg');
-  const msgText = document.getElementById('msgText');
-  const restartBtn = document.getElementById('restartBtn');
-
-  // Resize handling
-  function resize() {
-    W = canvas.width = innerWidth;
-    H = canvas.height = innerHeight;
-    horizon = Math.max(120, H * 0.28);
-    player.y = H * 0.78;
-    player.targetX = Math.min(Math.max(player.x, 30), W - 30);
+// === CONTROLS ===
+canvas.addEventListener("click", (e)=>{
+  const now = Date.now();
+  if(now - lastTap < 300 && player.discs > 0){
+    flyingDiscs.push({x: player.x, y: player.y, size: 12, color:"yellow"});
+    player.discs--;
+  } else {
+    if(e.clientX < canvas.width/2) player.x -= player.speed;
+    else player.x += player.speed;
   }
-  addEventListener('resize', resize);
+  player.x = Math.max(20, Math.min(canvas.width-20, player.x));
+  lastTap = now;
+});
 
-  // Prevent scroll on mobile when touching canvas
-  document.addEventListener('touchmove', (e) => { if(e.target === canvas) e.preventDefault(); }, { passive: false });
+// === GRID ===
+let gridOffset = 0;
+function drawGrid(){
+  ctx.strokeStyle = "lime";
+  ctx.lineWidth = 1;
+  gridOffset += 6;
 
-  // --- Controls: split-screen tap; left half -> left, right half -> right; double-tap -> fire ---
-  function handleTap(clientX) {
-    if(gameOver) return;
-    // movement: set a target x offset left or right by player.speed
-    if(clientX < W / 2) {
-      player.targetX = Math.max(30, player.targetX - player.speed * 1.1);
-    } else {
-      player.targetX = Math.min(W - 30, player.targetX + player.speed * 1.1);
-    }
-
-    // detect double-tap (within 320ms)
-    const now = Date.now();
-    if(now - lastTap < 320) {
-      fireProjectile();
-    }
-    lastTap = now;
+  for(let i = 0; i < canvas.height; i += gridSpacing){
+    const y = i + (gridOffset % gridSpacing);
+    const scale = 1 - (y-horizon)/(canvas.height-horizon);
+    if(scale <= 0) continue;
+    ctx.beginPath();
+    const left = canvas.width*0.25*(1-scale);
+    const right = canvas.width - canvas.width*0.25*(1-scale);
+    ctx.moveTo(left,y);
+    ctx.lineTo(right,y);
+    ctx.stroke();
   }
 
-  // support click
-  canvas.addEventListener('click', (ev) => {
-    handleTap(ev.clientX);
-  });
-
-  // support touch
-  canvas.addEventListener('touchstart', (ev) => {
-    const t = ev.changedTouches[0];
-    handleTap(t.clientX);
-  }, {passive:false});
-
-  // Fire disc (if we allow ammo) — here firing uses ammo if >0, else small cooldown alternative
-  function fireProjectile(){
-    if(player.ammo > 0) {
-      projectiles.push({
-        x: player.x,
-        y: player.y - player.height * 0.6,
-        r: 10,
-        vy: -18,
-        color: 'yellow'
-      });
-      player.ammo--;
-      updateUI();
-      return;
-    }
-    // if no ammo, allow a weak shot but with no effect? We'll allow a short-range shot but no ammo consumption.
-    projectiles.push({
-      x: player.x,
-      y: player.y - player.height * 0.6,
-      r: 8,
-      vy: -12,
-      color: '#b8ffd3'
-    });
+  for(let i=0;i<canvas.width;i+=gridSpacing){
+    ctx.beginPath();
+    ctx.moveTo(i, canvas.height);
+    ctx.lineTo(canvas.width/2, horizon);
+    ctx.stroke();
   }
+}
 
-  // Spawn a bot at horizon with x along the road
-  function spawnBot() {
-    // Pick x inside a safe road margin (leave small side margins for walls)
-    const margin = Math.max(80, W * 0.06);
-    const x = Math.random() * (W - margin * 2) + margin;
-    const y = horizon + 6; // just below horizon
-    const size = 26;
-    const speed = botBaseSpeed + botSpeedIncrease + Math.random()*1.2;
-    bots.push({
-      x, y, size,
-      color: 'var(--bot)',
-      speed,
-      trailX: [],
-      trailLen: 40 + Math.floor(Math.random() * 40)
-    });
+// === TRAILS ===
+function drawTrail(trail, color, width){
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.beginPath();
+  for(let i=0;i<trail.length;i++){
+    const t = trail[i];
+    if(i===0) ctx.moveTo(t.x, t.y);
+    else ctx.lineTo(t.x, t.y);
   }
+  ctx.stroke();
+}
 
-  // Spawn an ammo pickup near horizon
-  function spawnPickup() {
-    const margin = Math.max(60, W * 0.07);
-    const x = Math.random() * (W - margin * 2) + margin;
-    const y = horizon + (20 + Math.random()*40);
-    pickups.push({ x, y, size: 12, color: 'var(--pickup)' });
-  }
+// === PLAYER ===
+function updatePlayer(){
+  player.trail.push({x:player.x, y:player.y});
+  trails.push({x:player.x, y:player.y, color:player.color, owner:"player"});
+}
 
-  // Update AI and movement per frame
-  function updateEntities() {
-    // Player smooth move to targetX
-    player.x += (player.targetX - player.x) * player.turnSmoothing;
+function drawPlayer(){
+  drawTrail(player.trail, player.color, 12);
+  ctx.drawImage(playerImg, player.x-20, player.y-30, 40, 60);
+}
 
-    // maintain trailX (lateral history) to draw a vertical downward trail
-    player.trailX.unshift(player.x); // newest first
-    if(player.trailX.length > player.trailLen) player.trailX.length = player.trailLen;
+// === BOTS ===
+function spawnBot(){
+  const x = Math.random()*(canvas.width-100)+50;
+  bots.push({x:x, y:horizon+40, size:40, color:"cyan", trail:[], alive:true});
+}
 
-    // Bots: move downwards, slightly home toward player's x
-    for(let i = bots.length-1; i >= 0; i--) {
-      const b = bots[i];
+function updateBots(){
+  bots.forEach(bot=>{
+    if(!bot.alive) return;
 
-      // Homing lateral movement toward player's x with a difficulty factor
-      const dx = player.x - b.x;
-      b.x += Math.sign(dx) * Math.min(Math.abs(dx)*0.02 + 0.2, b.speed * 0.45);
-      // Add some jitter
-      b.x += Math.sin((frame + i*37) * 0.05) * 0.3;
+    bot.y += (knockbackTimer>0? 2 : 6);
+    if(bot.x < player.x) bot.x += 2;
+    if(bot.x > player.x) bot.x -= 2;
 
-      // Advance down the road (increase y)
-      // Speed scales slightly with y to give perspective
-      b.y += b.speed + ((b.y - horizon)/ (H - horizon)) * 1.6;
+    bot.trail.push({x:bot.x,y:bot.y});
+    trails.push({x:bot.x, y:bot.y, color:bot.color, owner:bot});
 
-      // record lateral trail to draw behind them
-      b.trailX = b.trailX || [];
-      b.trailX.unshift(b.x);
-      if(b.trailX.length > b.trailLen) b.trailX.length = b.trailLen;
-
-      // if bot reaches bottom -> collision / remove
-      if(b.y > H + 120) {
-        bots.splice(i,1);
-      }
-    }
-
-    // Projectiles
-    for(let i = projectiles.length-1; i >= 0; i--) {
-      const p = projectiles[i];
-      p.y += p.vy;
-      // remove if out of screen
-      if(p.y < -50) { projectiles.splice(i,1); continue; }
-      // collision with bots
-      for(let j = bots.length-1; j >= 0; j--) {
-        const b = bots[j];
-        const dx = p.x - b.x;
-        const dy = p.y - b.y;
-        const dist = Math.hypot(dx,dy);
-        if(dist < p.r + b.size*0.45) {
-          // explode: remove bot and projectile
-          bots.splice(j,1);
-          projectiles.splice(i,1);
-          score += 60;
-          // small chance to spawn an immediate pickup on bot death
-          if(Math.random() < 0.15) pickups.push({ x: b.x + (Math.random()-0.5)*40, y: b.y, size: 12, color: 'var(--pickup)' });
-          break;
-        }
-      }
-    }
-
-    // Pickups: fall down road slowly
-    for(let i = pickups.length-1; i >= 0; i--) {
-      const pk = pickups[i];
-      pk.y += 2.8 + ((pk.y - horizon)/(H - horizon)) * 1.4;
-      // collect if close to player
-      const d = Math.hypot(pk.x - player.x, pk.y - player.y);
-      if(d < 26) {
-        player.ammo += 1 + (Math.random() < 0.12 ? 1 : 0); // sometimes 2
-        pickups.splice(i,1);
-        score += 20;
-        updateUI();
-        continue;
-      }
-      if(pk.y > H + 60) pickups.splice(i,1);
-    }
-
-    // Collision: check bots vs player (approx rect / circle)
-    for(const b of bots) {
-      const dx = b.x - player.x;
-      const dy = b.y - player.y;
-      const dist = Math.hypot(dx,dy);
-      // collision threshold: use half diag
-      if(dist < (b.size * 0.6 + Math.max(player.width, player.height)*0.45)) {
-        endGame();
+    // check collision with trails
+    for(let i=0;i<trails.length;i++){
+      const t = trails[i];
+      if(t.owner === bot) continue; // ignore own newest segment, check older
+      const dx = bot.x - t.x;
+      const dy = bot.y - t.y;
+      if(Math.sqrt(dx*dx+dy*dy) < 12){
+        bot.alive = false;
+        bombs.push({x:bot.x, y:bot.y, size:20, active:true});
         break;
       }
     }
-  }
-
-  // ------- Drawing helpers for pseudo-3D road, grid, trails, and entities -------
-  function clear() {
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0,0,W,H);
-  }
-
-  function drawRoad() {
-    // Road background rectangle slightly darker
-    ctx.save();
-    // A gradient from mid-horizon to bottom to simulate depth
-    const g = ctx.createLinearGradient(0, horizon, 0, H);
-    g.addColorStop(0, '#04121a');
-    g.addColorStop(1, '#07131a');
-    ctx.fillStyle = g;
-    ctx.fillRect(0, horizon, W, H - horizon);
-
-    // Perspective grid lines (horizontal lines across the road)
-    ctx.lineWidth = 1;
-    ctx.strokeStyle = 'rgba(0,255,255,0.08)';
-    let offset = (frame * 6) % gridSpacing;
-    for(let y = horizon + offset; y < H; y += gridSpacing) {
-      // Fade lines as they approach horizon
-      const t = 1 - (y - horizon) / (H - horizon);
-      ctx.globalAlpha = Math.max(0.07, t * 0.8);
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(W, y);
-      ctx.stroke();
-    }
-    ctx.globalAlpha = 1;
-
-    // Converging vertical perspective lines (to horizon center)
-    ctx.strokeStyle = 'rgba(0,255,255,0.06)';
-    const vanX = W/2;
-    const vanY = horizon;
-    const step = Math.max(80, gridSpacing);
-    for(let x = 0; x <= W; x += step) {
-      ctx.beginPath();
-      ctx.moveTo(x, H);
-      ctx.lineTo(vanX, vanY);
-      ctx.stroke();
-    }
-
-    // Draw horizon line glow
-    ctx.fillStyle = 'rgba(0,200,255,0.06)';
-    ctx.fillRect(0, horizon-2, W, 6);
-
-    ctx.restore();
-  }
-
-  // Draw the player's vertical trailing beam that follows lateral history
-  function drawPlayerTrail() {
-    ctx.save();
-    // trail draws downward from player's y using the history array
-    // fade alpha from front to tail
-    const arr = player.trailX;
-    ctx.lineWidth = 6;
-    ctx.lineCap = 'round';
-    for(let i = 0; i < Math.min(arr.length, player.trailLen - 2); i++) {
-      const px = arr[i];
-      const py = player.y + i * player.trailSpacing;
-      const nx = arr[i+1] || px;
-      const ny = player.y + (i+1) * player.trailSpacing;
-      const alpha = 1 - (i / Math.min(arr.length, player.trailLen)) * 0.95;
-      ctx.strokeStyle = `rgba(0,245,255,${alpha.toFixed(3)})`;
-      ctx.beginPath();
-      ctx.moveTo(px, py);
-      ctx.lineTo(nx, ny);
-      ctx.stroke();
-    }
-    ctx.restore();
-  }
-
-  // Draw the player bike rectangle with a front nose to read as "lightcycle"
-  function drawPlayer() {
-    ctx.save();
-    // body
-    ctx.translate(player.x, player.y);
-    // slight tilt based on lateral velocity
-    const vx = (player.targetX - player.x);
-    const tilt = Math.max(-0.35, Math.min(0.35, vx * 0.004));
-    ctx.rotate(tilt);
-    // glow effect
-    ctx.shadowColor = 'rgba(0,245,255,0.22)';
-    ctx.shadowBlur = 18;
-    ctx.fillStyle = 'var(--player)';
-    ctx.fillRect(-player.width/2, -player.height/2, player.width, player.height);
-    // nose / head
-    ctx.beginPath();
-    ctx.moveTo(player.width/2, -player.height*0.18);
-    ctx.lineTo(player.width/2 + 12, 0);
-    ctx.lineTo(player.width/2, player.height*0.18);
-    ctx.closePath();
-    ctx.fill();
-    ctx.shadowBlur = 0;
-    ctx.restore();
-
-    // a small front light circle
-    ctx.beginPath();
-    ctx.fillStyle = 'rgba(180,255,255,0.95)';
-    ctx.arc(player.x, player.y - player.height*0.42, 6, 0, Math.PI*2);
-    ctx.fill();
-  }
-
-  // Draw bots with their downward trails
-  function drawBots() {
-    for(const b of bots) {
-      // trail drawn similarly to player but shorter
-      ctx.save();
-      const arr = b.trailX || [];
-      ctx.lineWidth = Math.max(6, b.size * 0.6);
-      for(let i = 0; i < Math.min(arr.length, b.trailLen); i++) {
-        const px = arr[i];
-        const py = b.y + i * 1.6;
-        const nx = arr[i+1] || px;
-        const ny = b.y + (i+1) * 1.6;
-        const alpha = Math.max(0.06, 1 - (i / Math.min(arr.length, b.trailLen)) * 0.98);
-        ctx.strokeStyle = `rgba(255,27,216,${alpha.toFixed(3)})`;
-        ctx.beginPath();
-        ctx.moveTo(px, py);
-        ctx.lineTo(nx, ny);
-        ctx.stroke();
-      }
-      ctx.restore();
-
-      // bot body (square)
-      ctx.save();
-      ctx.fillStyle = 'var(--bot)';
-      ctx.shadowColor = 'rgba(255,27,216,0.15)';
-      ctx.shadowBlur = 14;
-      ctx.fillRect(b.x - b.size/2, b.y - b.size/2, b.size, b.size);
-      ctx.restore();
-
-      // small headlight
-      ctx.beginPath();
-      ctx.fillStyle = 'rgba(255,255,255,0.9)';
-      ctx.arc(b.x, b.y - b.size*0.35, 4, 0, Math.PI*2);
-      ctx.fill();
-    }
-  }
-
-  // Draw pickups
-  function drawPickups() {
-    for(const pk of pickups) {
-      ctx.save();
-      ctx.translate(pk.x, pk.y);
-      ctx.shadowBlur = 10;
-      ctx.shadowColor = 'rgba(255,212,0,0.22)';
-      ctx.fillStyle = 'var(--pickup)';
-      ctx.beginPath();
-      ctx.arc(0,0, pk.size, 0, Math.PI*2);
-      ctx.fill();
-      ctx.restore();
-    }
-  }
-
-  // Draw projectiles
-  function drawProjectiles() {
-    for(const p of projectiles) {
-      ctx.save();
-      ctx.beginPath();
-      ctx.fillStyle = p.color;
-      ctx.shadowBlur = 14;
-      ctx.shadowColor = p.color;
-      ctx.arc(p.x, p.y, p.r, 0, Math.PI*2);
-      ctx.fill();
-      ctx.restore();
-    }
-  }
-
-  // UI update
-  function updateUI() {
-    scoreEl.textContent = `Score: ${score}`;
-    ammoEl.textContent = `Ammo: ${player.ammo}`;
-    roundEl.textContent = `Round: ${round}`;
-  }
-
-  // End game handler
-  function endGame() {
-    gameOver = true;
-    centerMsg.style.display = 'block';
-    msgText.innerText = `GAME OVER\nScore ${score}`;
-    restartBtn.focus();
-  }
-
-  restartBtn.addEventListener('click', () => {
-    resetGame();
-    centerMsg.style.display = 'none';
-    lastTap = 0;
   });
 
-  // Reset / start
-  function resetGame() {
-    score = 0;
-    round = 1;
-    gameOver = false;
-    bots.length = 0;
-    pickups.length = 0;
-    projectiles.length = 0;
-    player.ammo = 0;
-    player.x = W/2;
-    player.targetX = W/2;
-    player.trailX.length = 0;
-    botSpawnInterval = 60;
-    botBaseSpeed = 2.8;
-    botSpeedIncrease = 0;
-    botSpawnTimer = 40;
-    pickupSpawnTimer = 180;
-    frame = 0;
-    updateUI();
-    loop();
+  // cleanup offscreen
+  for(let i=bots.length-1;i>=0;i--){
+    if(bots[i].y>canvas.height){
+      bombs.push({x:bots[i].x, y:bots[i].y, size:20, active:true});
+      bots.splice(i,1);
+    }
   }
+}
 
-  // Difficulty scaling over time
-  function scaleDifficulty() {
-    if(frame % (60 * 12) === 0) {
-      round++;
-      // increase spawn frequency and bot speed slightly
-      botSpawnInterval = Math.max(18, botSpawnInterval - 4);
-      botBaseSpeed += 0.22;
-      botSpeedIncrease += 0.15;
-      // occasionally spawn a wave
-      if(Math.random() < 0.6) {
-        for(let i=0;i<3;i++) setTimeout(spawnBot, i*160);
+function drawBots(){
+  bots.forEach(bot=>{
+    if(!bot.alive) return;
+    drawTrail(bot.trail, "cyan", 12);
+    ctx.drawImage(botImg, bot.x-20, bot.y-30, 40, 60);
+  });
+}
+
+// === BOMBS ===
+function drawBombs(){
+  bombs.forEach(b=>{
+    ctx.fillStyle="orange";
+    ctx.beginPath();
+    ctx.arc(b.x,b.y,b.size,0,Math.PI*2);
+    ctx.fill();
+  });
+}
+
+// === DISCS ===
+function updateDiscs(){
+  flyingDiscs.forEach(fd=>fd.y -= 15);
+
+  for(let i=flyingDiscs.length-1;i>=0;i--){
+    const fd = flyingDiscs[i];
+    for(let j=bots.length-1;j>=0;j--){
+      const b = bots[j];
+      if(!b.alive) continue;
+      const dx=fd.x-b.x, dy=fd.y-b.y;
+      if(Math.sqrt(dx*dx+dy*dy) < 30){
+        b.alive=false;
+        bombs.push({x:b.x,y:b.y,size:20,active:true});
+        flyingDiscs.splice(i,1);
+        break;
       }
-      updateUI();
+    }
+    for(let j=bombs.length-1;j>=0;j--){
+      const bo = bombs[j];
+      const dx=fd.x-bo.x, dy=fd.y-bo.y;
+      if(Math.sqrt(dx*dx+dy*dy)<bo.size){
+        flyingDiscs.splice(i,1);
+        knockbackTimer = 600;
+        bombs.splice(j,1);
+        break;
+      }
+    }
+    if(fd && fd.y<0) flyingDiscs.splice(i,1);
+  }
+}
+
+function drawDiscs(){
+  flyingDiscs.forEach(fd=>{
+    ctx.fillStyle=fd.color;
+    ctx.beginPath();
+    ctx.arc(fd.x,fd.y,fd.size,0,Math.PI*2);
+    ctx.fill();
+  });
+}
+
+// === COLLISIONS ===
+function checkTrailCollision(){
+  for(let i=0;i<trails.length;i++){
+    const t = trails[i];
+    if(t.color === player.color) continue; // ignore own red trail
+    const dx = player.x - t.x;
+    const dy = player.y - t.y;
+    if(Math.sqrt(dx*dx+dy*dy) < 12){
+      gameOver = true;
+      return;
     }
   }
+}
 
-  // Main draw + update loop
-  function loop() {
-    if(gameOver) return;
-    frame++;
+// === HUD ===
+function drawHUD(){
+  ctx.fillStyle="white";
+  ctx.font="24px Arial";
+  ctx.fillText(`Score: ${score} | Discs: ${player.discs}`,20,40);
+  if(knockbackTimer>0){
+    ctx.fillStyle="yellow";
+    ctx.fillText("KNOCKBACK ACTIVE!", canvas.width/2-100, 40);
+  }
+}
 
-    // Clear
-    clear();
-
-    // Road + grid
-    drawRoad();
-
-    // Spawn logic
-    if(--botSpawnTimer <= 0) {
-      spawnBot();
-      botSpawnTimer = botSpawnInterval + Math.floor(Math.random() * 18) - Math.floor(Math.random() * 12);
-    }
-    if(--pickupSpawnTimer <= 0) {
-      // more rarer pickups as rounds increase
-      if(Math.random() < 0.9) spawnPickup();
-      pickupSpawnTimer = Math.max(120, pickupSpawnInterval - Math.floor(Math.random()*40));
-    }
-
-    // Entities update
-    updateEntities();
-
-    // Difficulty scaling
-    scaleDifficulty();
-
-    // Draw trails first
-    drawPlayerTrail();
-    drawBots();
-
-    // Draw pickups & projectiles & player
-    drawPickups();
-    drawProjectiles();
-    drawPlayer();
-
-    // simple HUD dots at top right for round/score etc are handled by DOM
-
-    // increment score slowly over time and for kills / pickups
-    score += 1;
-    updateUI();
-
-    requestAnimationFrame(loop);
+// === GAME LOOP ===
+function gameLoop(){
+  if(gameOver){
+    ctx.fillStyle="white";
+    ctx.font="48px Arial";
+    ctx.fillText("GAME OVER",canvas.width/2-150,canvas.height/2);
+    ctx.fillText(`Score: ${score}`,canvas.width/2-80,canvas.height/2+60);
+    return;
   }
 
-  // Start immediately
-  updateUI();
-  loop();
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  drawGrid();
+  updatePlayer();
+  drawPlayer();
 
-  // expose some debug helpers to console (optional)
-  window._tron = { bots, pickups, projectiles, player, spawnBot, spawnPickup };
+  if(botSpawnTimer<=0){spawnBot();botSpawnTimer=60;} else botSpawnTimer--;
+  if(discSpawnTimer<=0){player.discs++;discSpawnTimer=300;} else discSpawnTimer--;
 
-})();
+  updateBots();
+  drawBots();
+  updateDiscs();
+  drawDiscs();
+  drawBombs();
+  checkTrailCollision();
+
+  drawHUD();
+  score++;
+  if(knockbackTimer>0) knockbackTimer--;
+
+  requestAnimationFrame(gameLoop);
+}
+gameLoop();
 </script>
 </body>
 </html>
