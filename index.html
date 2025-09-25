@@ -20,11 +20,12 @@ canvas.height = window.innerHeight;
 const horizon = canvas.height * 0.25;
 const gridSpacing = 60;
 
-// Placeholder bike sprites (replace with PNGs)
+// Replace placeholder images with local PNGs
 const playerImg = new Image();
-playerImg.src = "https://dummyimage.com/40x60/ff0000/000000&text=P"; // red bike
+playerImg.src = "assets/redbike.png";   // red bike
 const botImg = new Image();
-botImg.src = "https://dummyimage.com/40x60/00ffff/000000&text=B"; // cyan bike
+botImg.src = "assets/cyanbike.png";    // cyan bike
+
 
 let lastTap = 0;
 let score = 0;
