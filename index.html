@@ -1,229 +1,570 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
 <title>L I G H T R U N N E R</title>
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
-html,body{margin:0;padding:0;overflow:hidden;height:100%;background:black;font-family:'Share Tech Mono', monospace;}
-canvas{display:block;}
-#menu{
-  position:absolute;top:0;left:0;width:100%;height:100%;
-  display:flex;flex-direction:column;justify-content:center;align-items:center;
-  background: rgba(0,0,0,0.85); z-index:10;color:white;
-}
-#menu input,#menu select,#menu button{
-  margin:8px;padding:12px;font-size:18px;
-  background:#111;border:2px solid cyan;color:white;border-radius:6px;
-  text-shadow:0 0 5px cyan;
-  cursor:pointer;transition:0.2s;
-}
-#menu input:focus,#menu select:focus,#menu button:hover{
-  border-color:#0ff;text-shadow:0 0 10px #0ff;outline:none;
-}
-#title{
-  font-size:72px;color:cyan;font-weight:bold;
-  animation:bob 1.5s infinite alternate;
-  margin-bottom:20px;
-  text-shadow:0 0 15px cyan,0 0 30px cyan;
-}
-@keyframes bob{0%{transform:translateY(0px);}100%{transform:translateY(20px);}}
-#hud{position:absolute;top:10px;left:10px;color:white;font-weight:bold;font-size:20px;z-index:5;}
+  :root{
+    --bg:#000;
+    --road:#07131a;
+    --grid: #0ff;
+    --bot: #ff1bd8;
+    --player: #00f5ff;
+    --pickup: #ffd400;
+    --ui: #fff;
+  }
+  html,body{height:100%;margin:0;background:var(--bg);-webkit-tap-highlight-color:transparent;touch-action: none;}
+  canvas{display:block;width:100vw;height:100vh;}
+  .ui {
+    position: fixed; left: 12px; top: 8px; color:var(--ui); font-family: Inter, system-ui, -apple-system, "Helvetica Neue", Arial;
+    user-select:none;
+  }
+  .ui .score { font-size:18px; font-weight:700; }
+  .ui .info { font-size:13px; opacity:0.9; margin-top:6px; }
+  .centerMsg {
+    position: fixed; left:50%; top:50%; transform:translate(-50%,-50%); color:var(--ui); text-align:center;
+  }
+  button {
+    font-size:16px; padding:10px 16px; border-radius:8px; border:none; cursor:pointer;
+    background:#0ff; color:#001; font-weight:700;
+  }
 </style>
 </head>
 <body>
-<div id="menu">
-  <div id="title">L I G H T R U N N E R</div>
-  <input id="playerName" placeholder="Enter your name" maxlength="12"/>
-  <select id="bikeColor">
-    <option value="cyan">Cyan</option>
-    <option value="magenta">Magenta</option>
-    <option value="yellow">Yellow</option>
-    <option value="lime">Lime</option>
-    <option value="blue">Blue</option>
-    <option value="red">Red</option>
-    <option value="green">Green</option>
-  </select>
-  <button id="startBtn">Run!</button>
-  <div style="margin-top:10px;font-size:14px;opacity:0.8;">
-    Controls: A/D to change lane, W/S to speed up/slow down, Space to jump
-  </div>
+<canvas id="game"></canvas>
+
+<div class="ui">
+  <div class="score" id="score">Score: 0</div>
+  <div class="info" id="ammo">Ammo: 0</div>
+  <div class="info" id="round">Round: 1</div>
 </div>
-<div id="hud"></div>
-<canvas id="gameCanvas"></canvas>
+
+<div class="centerMsg" id="centerMsg" style="display:none;">
+  <div id="msgText" style="font-size:28px;font-weight:800;margin-bottom:12px"></div>
+  <button id="restartBtn">Restart</button>
+</div>
 
 <script>
-const canvas=document.getElementById('gameCanvas');
-const ctx=canvas.getContext('2d');
-let width=canvas.width=window.innerWidth;
-let height=canvas.height=window.innerHeight;
-const hud=document.getElementById('hud');
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d', { alpha: false });
+  let W = canvas.width = innerWidth;
+  let H = canvas.height = innerHeight;
 
-let gameRunning=false;
-let distance=0,score=0,speed=10;
-const GRAVITY=1;
-const LANE_COUNT=3,LANE_WIDTH=width/4;
+  // Road / horizon
+  let horizon = Math.max(120, H * 0.28);
+  const gridSpacing = 48;
 
-let player,obstacles=[],keys={a:false,d:false,w:false,s:false,space:false};
+  // State
+  let score = 0;
+  let round = 1;
+  let gameOver = false;
 
-// --- Player Class ---
-class Player{
-  constructor(color){
-    this.color=color;
-    this.lane=1; 
-    this.x=this.getX();
-    this.y=height-150;
-    this.z=0;
-    this.vy=0;
-    this.onGround=true;
-    this.alive=true;
+  // Player (bigger lightcycle)
+  const player = {
+    x: W / 2,
+    y: H * 0.78,
+    width: 36,
+    height: 48,
+    color: 'var(--player)',
+    speed: 18,          // lateral step when tapping
+    turnSmoothing: 0.2,// smoothing when moving toward target x
+    targetX: W / 2,
+    ammo: 0,
+    trailX: [],        // hold recent x positions to create vertical downward trail
+    trailLen: 90,
+    trailSpacing: 2.5  // vertical pixels per trail sample
+  };
+
+  // Entities
+  const bots = [];      // enemies
+  const pickups = [];   // ammo pickups
+  const projectiles = []; // discs fired by player
+
+  // Difficulty & spawn control
+  let botSpawnTimer = 60; // frames
+  let botSpawnInterval = 60;
+  let pickupSpawnTimer = 220;
+  let pickupSpawnInterval = 220;
+  let botBaseSpeed = 2.8;
+  let botSpeedIncrease = 0;
+  let frame = 0;
+
+  // Input / double-tap detection
+  let lastTap = 0;
+  let pointerId = null; // single pointer support
+  let lastPointerX = null;
+
+  // UI elements
+  const scoreEl = document.getElementById('score');
+  const ammoEl = document.getElementById('ammo');
+  const roundEl = document.getElementById('round');
+  const centerMsg = document.getElementById('centerMsg');
+  const msgText = document.getElementById('msgText');
+  const restartBtn = document.getElementById('restartBtn');
+
+  // Resize handling
+  function resize() {
+    W = canvas.width = innerWidth;
+    H = canvas.height = innerHeight;
+    horizon = Math.max(120, H * 0.28);
+    player.y = H * 0.78;
+    player.targetX = Math.min(Math.max(player.x, 30), W - 30);
   }
-  getX(){ return width/2 + (this.lane-1)*LANE_WIDTH; }
-  move(){
-    if(!this.alive) return;
+  addEventListener('resize', resize);
 
-    // Lane movement with smooth transition
-    if(keys.a && this.lane>0) this.lane--;
-    if(keys.d && this.lane<LANE_COUNT-1) this.lane++;
-    this.x += (this.getX() - this.x) * 0.2;
+  // Prevent scroll on mobile when touching canvas
+  document.addEventListener('touchmove', (e) => { if(e.target === canvas) e.preventDefault(); }, { passive: false });
 
-    // Jump
-    if(keys.space && this.onGround){
-      this.vy=-20; 
-      this.onGround=false; 
-      keys.space=false;
+  // --- Controls: split-screen tap; left half -> left, right half -> right; double-tap -> fire ---
+  function handleTap(clientX) {
+    if(gameOver) return;
+    // movement: set a target x offset left or right by player.speed
+    if(clientX < W / 2) {
+      player.targetX = Math.max(30, player.targetX - player.speed * 1.1);
+    } else {
+      player.targetX = Math.min(W - 30, player.targetX + player.speed * 1.1);
     }
-    this.vy += GRAVITY;
-    this.y += this.vy;
-    if(this.y>=height-150){this.y=height-150; this.vy=0; this.onGround=true;}
 
-    // Move forward
-    this.z += speed;
+    // detect double-tap (within 320ms)
+    const now = Date.now();
+    if(now - lastTap < 320) {
+      fireProjectile();
+    }
+    lastTap = now;
+  }
 
-    // Collision
-    obstacles.forEach(obs=>{
-      if(obs.lane===this.lane && this.z>obs.z && this.z<obs.z+obs.depth && this.y>height-150-obs.height){
-        this.alive=false;
-      }
+  // support click
+  canvas.addEventListener('click', (ev) => {
+    handleTap(ev.clientX);
+  });
+
+  // support touch
+  canvas.addEventListener('touchstart', (ev) => {
+    const t = ev.changedTouches[0];
+    handleTap(t.clientX);
+  }, {passive:false});
+
+  // Fire disc (if we allow ammo) — here firing uses ammo if >0, else small cooldown alternative
+  function fireProjectile(){
+    if(player.ammo > 0) {
+      projectiles.push({
+        x: player.x,
+        y: player.y - player.height * 0.6,
+        r: 10,
+        vy: -18,
+        color: 'yellow'
+      });
+      player.ammo--;
+      updateUI();
+      return;
+    }
+    // if no ammo, allow a weak shot but with no effect? We'll allow a short-range shot but no ammo consumption.
+    projectiles.push({
+      x: player.x,
+      y: player.y - player.height * 0.6,
+      r: 8,
+      vy: -12,
+      color: '#b8ffd3'
     });
   }
-  draw(){
-    let scale = 1 - (this.z/5000); // simulate perspective
-    if(scale<0.2) scale=0.2;
 
-    // Draw bike
-    let rectWidth = 40*scale;
-    let rectHeight = 30*scale;
-    let rectX = this.x - rectWidth/2;
-    let rectY = this.y - rectHeight;
+  // Spawn a bot at horizon with x along the road
+  function spawnBot() {
+    // Pick x inside a safe road margin (leave small side margins for walls)
+    const margin = Math.max(80, W * 0.06);
+    const x = Math.random() * (W - margin * 2) + margin;
+    const y = horizon + 6; // just below horizon
+    const size = 26;
+    const speed = botBaseSpeed + botSpeedIncrease + Math.random()*1.2;
+    bots.push({
+      x, y, size,
+      color: 'var(--bot)',
+      speed,
+      trailX: [],
+      trailLen: 40 + Math.floor(Math.random() * 40)
+    });
+  }
 
-    ctx.fillStyle=this.color;
-    ctx.shadowBlur=20; ctx.shadowColor=this.color;
-    ctx.fillRect(rectX,rectY,rectWidth,rectHeight);
+  // Spawn an ammo pickup near horizon
+  function spawnPickup() {
+    const margin = Math.max(60, W * 0.07);
+    const x = Math.random() * (W - margin * 2) + margin;
+    const y = horizon + (20 + Math.random()*40);
+    pickups.push({ x, y, size: 12, color: 'var(--pickup)' });
+  }
 
+  // Update AI and movement per frame
+  function updateEntities() {
+    // Player smooth move to targetX
+    player.x += (player.targetX - player.x) * player.turnSmoothing;
+
+    // maintain trailX (lateral history) to draw a vertical downward trail
+    player.trailX.unshift(player.x); // newest first
+    if(player.trailX.length > player.trailLen) player.trailX.length = player.trailLen;
+
+    // Bots: move downwards, slightly home toward player's x
+    for(let i = bots.length-1; i >= 0; i--) {
+      const b = bots[i];
+
+      // Homing lateral movement toward player's x with a difficulty factor
+      const dx = player.x - b.x;
+      b.x += Math.sign(dx) * Math.min(Math.abs(dx)*0.02 + 0.2, b.speed * 0.45);
+      // Add some jitter
+      b.x += Math.sin((frame + i*37) * 0.05) * 0.3;
+
+      // Advance down the road (increase y)
+      // Speed scales slightly with y to give perspective
+      b.y += b.speed + ((b.y - horizon)/ (H - horizon)) * 1.6;
+
+      // record lateral trail to draw behind them
+      b.trailX = b.trailX || [];
+      b.trailX.unshift(b.x);
+      if(b.trailX.length > b.trailLen) b.trailX.length = b.trailLen;
+
+      // if bot reaches bottom -> collision / remove
+      if(b.y > H + 120) {
+        bots.splice(i,1);
+      }
+    }
+
+    // Projectiles
+    for(let i = projectiles.length-1; i >= 0; i--) {
+      const p = projectiles[i];
+      p.y += p.vy;
+      // remove if out of screen
+      if(p.y < -50) { projectiles.splice(i,1); continue; }
+      // collision with bots
+      for(let j = bots.length-1; j >= 0; j--) {
+        const b = bots[j];
+        const dx = p.x - b.x;
+        const dy = p.y - b.y;
+        const dist = Math.hypot(dx,dy);
+        if(dist < p.r + b.size*0.45) {
+          // explode: remove bot and projectile
+          bots.splice(j,1);
+          projectiles.splice(i,1);
+          score += 60;
+          // small chance to spawn an immediate pickup on bot death
+          if(Math.random() < 0.15) pickups.push({ x: b.x + (Math.random()-0.5)*40, y: b.y, size: 12, color: 'var(--pickup)' });
+          break;
+        }
+      }
+    }
+
+    // Pickups: fall down road slowly
+    for(let i = pickups.length-1; i >= 0; i--) {
+      const pk = pickups[i];
+      pk.y += 2.8 + ((pk.y - horizon)/(H - horizon)) * 1.4;
+      // collect if close to player
+      const d = Math.hypot(pk.x - player.x, pk.y - player.y);
+      if(d < 26) {
+        player.ammo += 1 + (Math.random() < 0.12 ? 1 : 0); // sometimes 2
+        pickups.splice(i,1);
+        score += 20;
+        updateUI();
+        continue;
+      }
+      if(pk.y > H + 60) pickups.splice(i,1);
+    }
+
+    // Collision: check bots vs player (approx rect / circle)
+    for(const b of bots) {
+      const dx = b.x - player.x;
+      const dy = b.y - player.y;
+      const dist = Math.hypot(dx,dy);
+      // collision threshold: use half diag
+      if(dist < (b.size * 0.6 + Math.max(player.width, player.height)*0.45)) {
+        endGame();
+        break;
+      }
+    }
+  }
+
+  // ------- Drawing helpers for pseudo-3D road, grid, trails, and entities -------
+  function clear() {
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0,0,W,H);
+  }
+
+  function drawRoad() {
+    // Road background rectangle slightly darker
+    ctx.save();
+    // A gradient from mid-horizon to bottom to simulate depth
+    const g = ctx.createLinearGradient(0, horizon, 0, H);
+    g.addColorStop(0, '#04121a');
+    g.addColorStop(1, '#07131a');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, horizon, W, H - horizon);
+
+    // Perspective grid lines (horizontal lines across the road)
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(0,255,255,0.08)';
+    let offset = (frame * 6) % gridSpacing;
+    for(let y = horizon + offset; y < H; y += gridSpacing) {
+      // Fade lines as they approach horizon
+      const t = 1 - (y - horizon) / (H - horizon);
+      ctx.globalAlpha = Math.max(0.07, t * 0.8);
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(W, y);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+
+    // Converging vertical perspective lines (to horizon center)
+    ctx.strokeStyle = 'rgba(0,255,255,0.06)';
+    const vanX = W/2;
+    const vanY = horizon;
+    const step = Math.max(80, gridSpacing);
+    for(let x = 0; x <= W; x += step) {
+      ctx.beginPath();
+      ctx.moveTo(x, H);
+      ctx.lineTo(vanX, vanY);
+      ctx.stroke();
+    }
+
+    // Draw horizon line glow
+    ctx.fillStyle = 'rgba(0,200,255,0.06)';
+    ctx.fillRect(0, horizon-2, W, 6);
+
+    ctx.restore();
+  }
+
+  // Draw the player's vertical trailing beam that follows lateral history
+  function drawPlayerTrail() {
+    ctx.save();
+    // trail draws downward from player's y using the history array
+    // fade alpha from front to tail
+    const arr = player.trailX;
+    ctx.lineWidth = 6;
+    ctx.lineCap = 'round';
+    for(let i = 0; i < Math.min(arr.length, player.trailLen - 2); i++) {
+      const px = arr[i];
+      const py = player.y + i * player.trailSpacing;
+      const nx = arr[i+1] || px;
+      const ny = player.y + (i+1) * player.trailSpacing;
+      const alpha = 1 - (i / Math.min(arr.length, player.trailLen)) * 0.95;
+      ctx.strokeStyle = `rgba(0,245,255,${alpha.toFixed(3)})`;
+      ctx.beginPath();
+      ctx.moveTo(px, py);
+      ctx.lineTo(nx, ny);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // Draw the player bike rectangle with a front nose to read as "lightcycle"
+  function drawPlayer() {
+    ctx.save();
+    // body
+    ctx.translate(player.x, player.y);
+    // slight tilt based on lateral velocity
+    const vx = (player.targetX - player.x);
+    const tilt = Math.max(-0.35, Math.min(0.35, vx * 0.004));
+    ctx.rotate(tilt);
+    // glow effect
+    ctx.shadowColor = 'rgba(0,245,255,0.22)';
+    ctx.shadowBlur = 18;
+    ctx.fillStyle = 'var(--player)';
+    ctx.fillRect(-player.width/2, -player.height/2, player.width, player.height);
+    // nose / head
     ctx.beginPath();
-    ctx.moveTo(this.x, rectY-20*scale);
-    ctx.lineTo(rectX, rectY);
-    ctx.lineTo(rectX+rectWidth, rectY);
+    ctx.moveTo(player.width/2, -player.height*0.18);
+    ctx.lineTo(player.width/2 + 12, 0);
+    ctx.lineTo(player.width/2, player.height*0.18);
     ctx.closePath();
     ctx.fill();
-    ctx.shadowBlur=0;
-  }
-}
+    ctx.shadowBlur = 0;
+    ctx.restore();
 
-// --- Obstacle Class ---
-class Obstacle{
-  constructor(lane,z){
-    this.lane=lane;
-    this.z=z;
-    this.height=60;
-    this.depth=60;
+    // a small front light circle
+    ctx.beginPath();
+    ctx.fillStyle = 'rgba(180,255,255,0.95)';
+    ctx.arc(player.x, player.y - player.height*0.42, 6, 0, Math.PI*2);
+    ctx.fill();
   }
-  draw(){
-    let scale = 1 - ((this.z - player.z)/5000);
-    if(scale<0.2) scale=0.2;
-    let x = width/2 + (this.lane-1)*LANE_WIDTH - (LANE_WIDTH/2)*scale;
-    let y = height-150 - this.height*scale;
-    ctx.fillStyle='red';
-    ctx.fillRect(x,y,LANE_WIDTH*scale,this.height*scale);
-  }
-}
 
-// --- Game Functions ---
-function startGame(name,color){
-  gameRunning=true; distance=0;score=0; speed=10;
-  player=new Player(color);
-  obstacles=[];
+  // Draw bots with their downward trails
+  function drawBots() {
+    for(const b of bots) {
+      // trail drawn similarly to player but shorter
+      ctx.save();
+      const arr = b.trailX || [];
+      ctx.lineWidth = Math.max(6, b.size * 0.6);
+      for(let i = 0; i < Math.min(arr.length, b.trailLen); i++) {
+        const px = arr[i];
+        const py = b.y + i * 1.6;
+        const nx = arr[i+1] || px;
+        const ny = b.y + (i+1) * 1.6;
+        const alpha = Math.max(0.06, 1 - (i / Math.min(arr.length, b.trailLen)) * 0.98);
+        ctx.strokeStyle = `rgba(255,27,216,${alpha.toFixed(3)})`;
+        ctx.beginPath();
+        ctx.moveTo(px, py);
+        ctx.lineTo(nx, ny);
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      // bot body (square)
+      ctx.save();
+      ctx.fillStyle = 'var(--bot)';
+      ctx.shadowColor = 'rgba(255,27,216,0.15)';
+      ctx.shadowBlur = 14;
+      ctx.fillRect(b.x - b.size/2, b.y - b.size/2, b.size, b.size);
+      ctx.restore();
+
+      // small headlight
+      ctx.beginPath();
+      ctx.fillStyle = 'rgba(255,255,255,0.9)';
+      ctx.arc(b.x, b.y - b.size*0.35, 4, 0, Math.PI*2);
+      ctx.fill();
+    }
+  }
+
+  // Draw pickups
+  function drawPickups() {
+    for(const pk of pickups) {
+      ctx.save();
+      ctx.translate(pk.x, pk.y);
+      ctx.shadowBlur = 10;
+      ctx.shadowColor = 'rgba(255,212,0,0.22)';
+      ctx.fillStyle = 'var(--pickup)';
+      ctx.beginPath();
+      ctx.arc(0,0, pk.size, 0, Math.PI*2);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  // Draw projectiles
+  function drawProjectiles() {
+    for(const p of projectiles) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.fillStyle = p.color;
+      ctx.shadowBlur = 14;
+      ctx.shadowColor = p.color;
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI*2);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  // UI update
+  function updateUI() {
+    scoreEl.textContent = `Score: ${score}`;
+    ammoEl.textContent = `Ammo: ${player.ammo}`;
+    roundEl.textContent = `Round: ${round}`;
+  }
+
+  // End game handler
+  function endGame() {
+    gameOver = true;
+    centerMsg.style.display = 'block';
+    msgText.innerText = `GAME OVER\nScore ${score}`;
+    restartBtn.focus();
+  }
+
+  restartBtn.addEventListener('click', () => {
+    resetGame();
+    centerMsg.style.display = 'none';
+    lastTap = 0;
+  });
+
+  // Reset / start
+  function resetGame() {
+    score = 0;
+    round = 1;
+    gameOver = false;
+    bots.length = 0;
+    pickups.length = 0;
+    projectiles.length = 0;
+    player.ammo = 0;
+    player.x = W/2;
+    player.targetX = W/2;
+    player.trailX.length = 0;
+    botSpawnInterval = 60;
+    botBaseSpeed = 2.8;
+    botSpeedIncrease = 0;
+    botSpawnTimer = 40;
+    pickupSpawnTimer = 180;
+    frame = 0;
+    updateUI();
+    loop();
+  }
+
+  // Difficulty scaling over time
+  function scaleDifficulty() {
+    if(frame % (60 * 12) === 0) {
+      round++;
+      // increase spawn frequency and bot speed slightly
+      botSpawnInterval = Math.max(18, botSpawnInterval - 4);
+      botBaseSpeed += 0.22;
+      botSpeedIncrease += 0.15;
+      // occasionally spawn a wave
+      if(Math.random() < 0.6) {
+        for(let i=0;i<3;i++) setTimeout(spawnBot, i*160);
+      }
+      updateUI();
+    }
+  }
+
+  // Main draw + update loop
+  function loop() {
+    if(gameOver) return;
+    frame++;
+
+    // Clear
+    clear();
+
+    // Road + grid
+    drawRoad();
+
+    // Spawn logic
+    if(--botSpawnTimer <= 0) {
+      spawnBot();
+      botSpawnTimer = botSpawnInterval + Math.floor(Math.random() * 18) - Math.floor(Math.random() * 12);
+    }
+    if(--pickupSpawnTimer <= 0) {
+      // more rarer pickups as rounds increase
+      if(Math.random() < 0.9) spawnPickup();
+      pickupSpawnTimer = Math.max(120, pickupSpawnInterval - Math.floor(Math.random()*40));
+    }
+
+    // Entities update
+    updateEntities();
+
+    // Difficulty scaling
+    scaleDifficulty();
+
+    // Draw trails first
+    drawPlayerTrail();
+    drawBots();
+
+    // Draw pickups & projectiles & player
+    drawPickups();
+    drawProjectiles();
+    drawPlayer();
+
+    // simple HUD dots at top right for round/score etc are handled by DOM
+
+    // increment score slowly over time and for kills / pickups
+    score += 1;
+    updateUI();
+
+    requestAnimationFrame(loop);
+  }
+
+  // Start immediately
+  updateUI();
   loop();
-}
 
-function generateObstacles(){
-  if(Math.random()<0.03){
-    let lane=Math.floor(Math.random()*LANE_COUNT);
-    let z = player.z + width + Math.random()*1000;
-    obstacles.push(new Obstacle(lane,z));
-  }
-}
+  // expose some debug helpers to console (optional)
+  window._tron = { bots, pickups, projectiles, player, spawnBot, spawnPickup };
 
-function update(){
-  if(!player.alive) return;
-  player.move();
-  distance += speed;
-  score = Math.floor(distance/10);
-  generateObstacles();
-}
-
-function draw(){
-  ctx.clearRect(0,0,width,height);
-
-  // Draw lanes
-  for(let lane=0; lane<LANE_COUNT; lane++){
-    ctx.fillStyle='rgba(255,255,255,0.05)';
-    ctx.fillRect(width/2 + (lane-1)*LANE_WIDTH - LANE_WIDTH/2,0,LANE_WIDTH,height);
-  }
-
-  // Draw obstacles
-  obstacles.forEach(o=>o.draw());
-
-  // Draw player
-  player.draw();
-
-  hud.innerText=`Score: ${score}`;
-}
-
-function loop(){
-  if(!gameRunning) return;
-  requestAnimationFrame(loop);
-  update();
-  draw();
-}
-
-// --- Input ---
-document.addEventListener('keydown',e=>{
-  if(e.key==='a')keys.a=true;
-  if(e.key==='d')keys.d=true;
-  if(e.key==='w')keys.w=true;
-  if(e.key==='s')keys.s=true;
-  if(e.key===' ')keys.space=true;
-});
-document.addEventListener('keyup',e=>{
-  if(e.key==='a')keys.a=false;
-  if(e.key==='d')keys.d=false;
-  if(e.key==='w')keys.w=false;
-  if(e.key==='s')keys.s=false;
-  if(e.key===' ')keys.space=false;
-});
-
-// --- Start button ---
-document.getElementById('startBtn').addEventListener('click',()=>{
-  const name=document.getElementById('playerName').value||'Runner';
-  const color=document.getElementById('bikeColor').value||'cyan';
-  document.getElementById('menu').style.display='none';
-  startGame(name,color);
-});
-
-window.addEventListener('resize',()=>{width=canvas.width=window.innerWidth;height=canvas.height=window.innerHeight;});
+})();
 </script>
 </body>
 </html>
