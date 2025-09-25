@@ -34,7 +34,7 @@ canvas{display:block;}
 </head>
 <body>
 <div id="menu">
-  <div id="title">Tron Temple Run</div>
+  <div id="title">L I G H T R U N N E R</div>
   <input id="playerName" placeholder="Enter your name" maxlength="12"/>
   <select id="bikeColor">
     <option value="cyan">Cyan</option>
@@ -61,143 +61,116 @@ let height=canvas.height=window.innerHeight;
 const hud=document.getElementById('hud');
 
 let gameRunning=false;
-let distance=0,score=0,speed=8;
-const GRAVITY=0.8;
-const LANE_COUNT=3,LANE_WIDTH=width/6;
-const BOT_START_DELAY=500; // distance before bots appear
+let distance=0,score=0,speed=10;
+const GRAVITY=1;
+const LANE_COUNT=3,LANE_WIDTH=width/4;
 
-let player,bots=[],obstacles=[],projectiles=[],keys={a:false,d:false,w:false,s:false,space:false};
+let player,obstacles=[],keys={a:false,d:false,w:false,s:false,space:false};
 
-// --- Classes ---
-class Bike{
-  constructor(lane,color,name,isBot=false){
-    this.lane=lane;
-    this.color=color; this.name=name;
-    this.isBot=isBot; this.alive=true;
-    this.y=height-150; this.x=this.laneToX(lane);
-    this.z=0; this.vy=0; this.onGround=true;
-    this.attackCooldown=0;
+// --- Player Class ---
+class Player{
+  constructor(color){
+    this.color=color;
+    this.lane=1; 
+    this.x=this.getX();
+    this.y=height-150;
+    this.z=0;
+    this.vy=0;
+    this.onGround=true;
+    this.alive=true;
   }
-  laneToX(lane){return width/2 + (lane-1)*LANE_WIDTH;}
+  getX(){ return width/2 + (this.lane-1)*LANE_WIDTH; }
   move(){
-    if(!this.alive)return;
+    if(!this.alive) return;
 
-    // Forward movement
-    if(!this.isBot){
-      if(keys.w)this.z += speed;
-      if(keys.s)this.z -= speed*0.7;
-      if(keys.a && this.lane>0)this.lane--; 
-      if(keys.d && this.lane<LANE_COUNT-1)this.lane++;
-      this.x=this.laneToX(this.lane);
-      if(keys.space && this.onGround){this.vy=-15; this.onGround=false; keys.space=false;}
-    } else {
-      if(distance<BOT_START_DELAY) return; // Wait before chasing
-      // AI chasing player
-      if(this.z < player.z + 200)this.z += speed*0.9;
-      if(this.lane < player.lane)this.lane++;
-      else if(this.lane > player.lane)this.lane--;
-      this.x=this.laneToX(this.lane);
+    // Lane movement with smooth transition
+    if(keys.a && this.lane>0) this.lane--;
+    if(keys.d && this.lane<LANE_COUNT-1) this.lane++;
+    this.x += (this.getX() - this.x) * 0.2;
 
-      // Fire projectile occasionally
-      if(this.attackCooldown<=0 && Math.random()<0.01){
-        projectiles.push(new Projectile(this.x,this.y-50,this.z+50,this.color,false));
-        this.attackCooldown = 100;
-      }
-      this.attackCooldown--;
+    // Jump
+    if(keys.space && this.onGround){
+      this.vy=-20; 
+      this.onGround=false; 
+      keys.space=false;
     }
-
-    // Jump & gravity
-    this.y += this.vy;
     this.vy += GRAVITY;
+    this.y += this.vy;
     if(this.y>=height-150){this.y=height-150; this.vy=0; this.onGround=true;}
 
-    // Collision with obstacles
+    // Move forward
+    this.z += speed;
+
+    // Collision
     obstacles.forEach(obs=>{
-      if(this.lane===obs.lane && Math.abs(this.z-obs.z)<50 && this.y>=height-150-obs.height){
-        if(!this.isBot)this.alive=false;
+      if(obs.lane===this.lane && this.z>obs.z && this.z<obs.z+obs.depth && this.y>height-150-obs.height){
+        this.alive=false;
       }
     });
   }
   draw(){
-    let scale = 1 + ((this.z-player.z)/1000);
+    let scale = 1 - (this.z/5000); // simulate perspective
+    if(scale<0.2) scale=0.2;
 
-    // Draw rectangle base
-    let rectHeight = 30*scale, rectWidth = 20*scale;
+    // Draw bike
+    let rectWidth = 40*scale;
+    let rectHeight = 30*scale;
     let rectX = this.x - rectWidth/2;
-    let rectY = this.y - ((this.z-player.z)/5) - rectHeight;
+    let rectY = this.y - rectHeight;
 
     ctx.fillStyle=this.color;
-    ctx.shadowBlur=15; ctx.shadowColor=this.color;
+    ctx.shadowBlur=20; ctx.shadowColor=this.color;
     ctx.fillRect(rectX,rectY,rectWidth,rectHeight);
 
-    // Draw forward-pointing triangle on top
     ctx.beginPath();
-    ctx.moveTo(this.x, rectY - 20*scale);
-    ctx.lineTo(this.x - rectWidth/2, rectY);
-    ctx.lineTo(this.x + rectWidth/2, rectY);
+    ctx.moveTo(this.x, rectY-20*scale);
+    ctx.lineTo(rectX, rectY);
+    ctx.lineTo(rectX+rectWidth, rectY);
     ctx.closePath();
     ctx.fill();
     ctx.shadowBlur=0;
   }
 }
 
+// --- Obstacle Class ---
 class Obstacle{
   constructor(lane,z){
-    this.lane=lane; this.z=z;
+    this.lane=lane;
+    this.z=z;
     this.height=60;
-    this.width=LANE_WIDTH*0.8;
+    this.depth=60;
   }
   draw(){
-    let screenY = height - 150 - ((this.z - player.z)/5);
+    let scale = 1 - ((this.z - player.z)/5000);
+    if(scale<0.2) scale=0.2;
+    let x = width/2 + (this.lane-1)*LANE_WIDTH - (LANE_WIDTH/2)*scale;
+    let y = height-150 - this.height*scale;
     ctx.fillStyle='red';
-    ctx.fillRect(width/2 + (this.lane-1)*LANE_WIDTH - this.width/2,screenY - this.height,this.width,this.height);
-  }
-}
-
-class Projectile{
-  constructor(x,y,z,color,playerShot){
-    this.x=x; this.y=y; this.z=z; this.color=color; this.playerShot=playerShot;
-  }
-  move(){this.z += this.playerShot?speed*2:-speed*2;}
-  draw(){
-    let screenY = this.y - ((this.z - player.z)/5);
-    ctx.fillStyle=this.color;
-    ctx.beginPath();
-    ctx.arc(this.x,screenY,8,0,Math.PI*2);
-    ctx.fill();
-  }
-  checkCollision(){
-    if(!player.alive)return;
-    if(!this.playerShot && Math.abs(this.z-player.z)<20 && Math.abs(this.x-player.x)<30){
-      player.alive=false;
-    }
+    ctx.fillRect(x,y,LANE_WIDTH*scale,this.height*scale);
   }
 }
 
 // --- Game Functions ---
 function startGame(name,color){
-  gameRunning=true; distance=0;score=0; speed=8;
-  player=new Bike(1,color,name,false);
-  bots=[new Bike(0,'red','Bot1',true), new Bike(2,'magenta','Bot2',true)];
-  obstacles=[]; projectiles=[];
+  gameRunning=true; distance=0;score=0; speed=10;
+  player=new Player(color);
+  obstacles=[];
   loop();
 }
 
 function generateObstacles(){
-  if(Math.random()<0.02){
+  if(Math.random()<0.03){
     let lane=Math.floor(Math.random()*LANE_COUNT);
-    obstacles.push(new Obstacle(lane,player.z + 800 + Math.random()*400));
+    let z = player.z + width + Math.random()*1000;
+    obstacles.push(new Obstacle(lane,z));
   }
 }
 
 function update(){
-  if(!player.alive)return;
+  if(!player.alive) return;
   player.move();
-  bots.forEach(b=>b.move());
-  projectiles.forEach(p=>{p.move(); p.checkCollision();});
   distance += speed;
-  score=Math.floor(distance/10);
-  speed += 0.0005; // Gradually increase speed
+  score = Math.floor(distance/10);
   generateObstacles();
 }
 
@@ -206,25 +179,21 @@ function draw(){
 
   // Draw lanes
   for(let lane=0; lane<LANE_COUNT; lane++){
-    ctx.fillStyle=lane===1?'rgba(0,255,255,0.1)':'rgba(255,255,255,0.05)';
+    ctx.fillStyle='rgba(255,255,255,0.05)';
     ctx.fillRect(width/2 + (lane-1)*LANE_WIDTH - LANE_WIDTH/2,0,LANE_WIDTH,height);
   }
 
   // Draw obstacles
-  obstacles.forEach(obs=>obs.draw());
+  obstacles.forEach(o=>o.draw());
 
-  // Draw projectiles
-  projectiles.forEach(p=>p.draw());
-
-  // Draw bikes
+  // Draw player
   player.draw();
-  bots.forEach(b=>b.draw());
 
   hud.innerText=`Score: ${score}`;
 }
 
 function loop(){
-  if(!gameRunning)return;
+  if(!gameRunning) return;
   requestAnimationFrame(loop);
   update();
   draw();
