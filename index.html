@@ -20,18 +20,16 @@ canvas.height = window.innerHeight;
 const horizon = canvas.height * 0.25;
 const gridSpacing = 60;
 
-// Replace placeholder images with local PNGs
+// Load local bike images
 const playerImg = new Image();
 playerImg.src = "assets/redbike.png";   // red bike
 const botImg = new Image();
 botImg.src = "assets/cyanbike.png";    // cyan bike
 
-
 let lastTap = 0;
 let score = 0;
 let gameOver = false;
 let botSpawnTimer = 0;
-let discSpawnTimer = 0;
 
 const player = {
   x: canvas.width/2,
@@ -39,27 +37,19 @@ const player = {
   size: 40,
   speed: 12,
   color: "red",
-  discs: 0,
   trail: []
 };
 
 const bots = [];
-const flyingDiscs = [];
 const bombs = [];
-const trails = []; // global trails (walls)
-
+const trails = []; // global trail "walls"
 let knockbackTimer = 0;
 
 // === CONTROLS ===
 canvas.addEventListener("click", (e)=>{
   const now = Date.now();
-  if(now - lastTap < 300 && player.discs > 0){
-    flyingDiscs.push({x: player.x, y: player.y, size: 12, color:"yellow"});
-    player.discs--;
-  } else {
-    if(e.clientX < canvas.width/2) player.x -= player.speed;
-    else player.x += player.speed;
-  }
+  if(e.clientX < canvas.width/2) player.x -= player.speed;
+  else player.x += player.speed;
   player.x = Math.max(20, Math.min(canvas.width-20, player.x));
   lastTap = now;
 });
@@ -71,19 +61,18 @@ function drawGrid(){
   ctx.lineWidth = 1;
   gridOffset += 6;
 
-  for(let i = 0; i < canvas.height; i += gridSpacing){
+  // Horizontal lines (perspective shrink)
+  for(let i = horizon; i < canvas.height; i += gridSpacing){
     const y = i + (gridOffset % gridSpacing);
-    const scale = 1 - (y-horizon)/(canvas.height-horizon);
-    if(scale <= 0) continue;
+    if(y < horizon) continue;
     ctx.beginPath();
-    const left = canvas.width*0.25*(1-scale);
-    const right = canvas.width - canvas.width*0.25*(1-scale);
-    ctx.moveTo(left,y);
-    ctx.lineTo(right,y);
+    ctx.moveTo(0, y);
+    ctx.lineTo(canvas.width, y);
     ctx.stroke();
   }
 
-  for(let i=0;i<canvas.width;i+=gridSpacing){
+  // Vertical perspective lines
+  for(let i = 0; i <= canvas.width; i += gridSpacing){
     ctx.beginPath();
     ctx.moveTo(i, canvas.height);
     ctx.lineTo(canvas.width/2, horizon);
@@ -106,8 +95,12 @@ function drawTrail(trail, color, width){
 
 // === PLAYER ===
 function updatePlayer(){
-  player.trail.push({x:player.x, y:player.y});
-  trails.push({x:player.x, y:player.y, color:player.color, owner:"player"});
+  // Straight-down trail from current position
+  player.trail = [];
+  for(let y = player.y; y < canvas.height; y += 20){
+    player.trail.push({x: player.x, y: y});
+  }
+  trails.push({x: player.x, y: player.y, color: player.color, owner: "player"});
 }
 
 function drawPlayer(){
@@ -135,7 +128,7 @@ function updateBots(){
     // check collision with trails
     for(let i=0;i<trails.length;i++){
       const t = trails[i];
-      if(t.owner === bot) continue; // ignore own newest segment, check older
+      if(t.owner === bot) continue;
       const dx = bot.x - t.x;
       const dy = bot.y - t.y;
       if(Math.sqrt(dx*dx+dy*dy) < 12){
@@ -173,46 +166,6 @@ function drawBombs(){
   });
 }
 
-// === DISCS ===
-function updateDiscs(){
-  flyingDiscs.forEach(fd=>fd.y -= 15);
-
-  for(let i=flyingDiscs.length-1;i>=0;i--){
-    const fd = flyingDiscs[i];
-    for(let j=bots.length-1;j>=0;j--){
-      const b = bots[j];
-      if(!b.alive) continue;
-      const dx=fd.x-b.x, dy=fd.y-b.y;
-      if(Math.sqrt(dx*dx+dy*dy) < 30){
-        b.alive=false;
-        bombs.push({x:b.x,y:b.y,size:20,active:true});
-        flyingDiscs.splice(i,1);
-        break;
-      }
-    }
-    for(let j=bombs.length-1;j>=0;j--){
-      const bo = bombs[j];
-      const dx=fd.x-bo.x, dy=fd.y-bo.y;
-      if(Math.sqrt(dx*dx+dy*dy)<bo.size){
-        flyingDiscs.splice(i,1);
-        knockbackTimer = 600;
-        bombs.splice(j,1);
-        break;
-      }
-    }
-    if(fd && fd.y<0) flyingDiscs.splice(i,1);
-  }
-}
-
-function drawDiscs(){
-  flyingDiscs.forEach(fd=>{
-    ctx.fillStyle=fd.color;
-    ctx.beginPath();
-    ctx.arc(fd.x,fd.y,fd.size,0,Math.PI*2);
-    ctx.fill();
-  });
-}
-
 // === COLLISIONS ===
 function checkTrailCollision(){
   for(let i=0;i<trails.length;i++){
@@ -231,7 +184,7 @@ function checkTrailCollision(){
 function drawHUD(){
   ctx.fillStyle="white";
   ctx.font="24px Arial";
-  ctx.fillText(`Score: ${score} | Discs: ${player.discs}`,20,40);
+  ctx.fillText(`Score: ${score}`,20,40);
   if(knockbackTimer>0){
     ctx.fillStyle="yellow";
     ctx.fillText("KNOCKBACK ACTIVE!", canvas.width/2-100, 40);
@@ -254,12 +207,9 @@ function gameLoop(){
   drawPlayer();
 
   if(botSpawnTimer<=0){spawnBot();botSpawnTimer=60;} else botSpawnTimer--;
-  if(discSpawnTimer<=0){player.discs++;discSpawnTimer=300;} else discSpawnTimer--;
 
   updateBots();
   drawBots();
-  updateDiscs();
-  drawDiscs();
   drawBombs();
   checkTrailCollision();
 
