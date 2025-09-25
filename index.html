@@ -41,16 +41,22 @@ const player = {
 };
 
 const bots = [];
-const bombs = [];
 const trails = []; // global trail "walls"
-let knockbackTimer = 0;
+const discs = []; // light discs
 
 // === CONTROLS ===
 canvas.addEventListener("click", (e)=>{
   const now = Date.now();
+
+  // Move player
   if(e.clientX < canvas.width/2) player.x -= player.speed;
   else player.x += player.speed;
   player.x = Math.max(20, Math.min(canvas.width-20, player.x));
+
+  // Double tap to fire disc
+  if(now - lastTap < 300){ // 300ms threshold
+    fireLightDisc();
+  }
   lastTap = now;
 });
 
@@ -61,17 +67,13 @@ function drawGrid(){
   ctx.lineWidth = 1;
   gridOffset += 6;
 
-  // Horizontal lines (perspective shrink)
   for(let i = horizon; i < canvas.height; i += gridSpacing){
     const y = i + (gridOffset % gridSpacing);
-    if(y < horizon) continue;
     ctx.beginPath();
     ctx.moveTo(0, y);
     ctx.lineTo(canvas.width, y);
     ctx.stroke();
   }
-
-  // Vertical perspective lines
   for(let i = 0; i <= canvas.width; i += gridSpacing){
     ctx.beginPath();
     ctx.moveTo(i, canvas.height);
@@ -95,7 +97,6 @@ function drawTrail(trail, color, width){
 
 // === PLAYER ===
 function updatePlayer(){
-  // Straight-down trail from current position
   player.trail = [];
   for(let y = player.y; y < canvas.height; y += 20){
     player.trail.push({x: player.x, y: y});
@@ -108,6 +109,43 @@ function drawPlayer(){
   ctx.drawImage(playerImg, player.x-20, player.y-30, 40, 60);
 }
 
+// === LIGHT DISC ===
+function fireLightDisc(){
+  discs.push({
+    x: player.x,
+    y: player.y,
+    radius: 6,
+    speed: 15
+  });
+}
+
+function updateDiscs(){
+  for(let i=discs.length-1;i>=0;i--){
+    const d = discs[i];
+    d.y -= d.speed;
+    // check collision with bots
+    bots.forEach(bot=>{
+      if(!bot.alive) return;
+      const dx = d.x - bot.x;
+      const dy = d.y - bot.y;
+      if(Math.sqrt(dx*dx + dy*dy) < 20){
+        bot.alive = false;
+        discs.splice(i,1);
+      }
+    });
+    if(d.y < 0) discs.splice(i,1);
+  }
+}
+
+function drawDiscs(){
+  ctx.fillStyle = "cyan";
+  discs.forEach(d=>{
+    ctx.beginPath();
+    ctx.arc(d.x,d.y,d.radius,0,Math.PI*2);
+    ctx.fill();
+  });
+}
+
 // === BOTS ===
 function spawnBot(){
   const x = Math.random()*(canvas.width-100)+50;
@@ -118,7 +156,7 @@ function updateBots(){
   bots.forEach(bot=>{
     if(!bot.alive) return;
 
-    bot.y += (knockbackTimer>0? 2 : 6);
+    bot.y += 6;
     if(bot.x < player.x) bot.x += 2;
     if(bot.x > player.x) bot.x -= 2;
 
@@ -133,7 +171,6 @@ function updateBots(){
       const dy = bot.y - t.y;
       if(Math.sqrt(dx*dx+dy*dy) < 12){
         bot.alive = false;
-        bombs.push({x:bot.x, y:bot.y, size:20, active:true});
         break;
       }
     }
@@ -142,7 +179,6 @@ function updateBots(){
   // cleanup offscreen
   for(let i=bots.length-1;i>=0;i--){
     if(bots[i].y>canvas.height){
-      bombs.push({x:bots[i].x, y:bots[i].y, size:20, active:true});
       bots.splice(i,1);
     }
   }
@@ -156,21 +192,11 @@ function drawBots(){
   });
 }
 
-// === BOMBS ===
-function drawBombs(){
-  bombs.forEach(b=>{
-    ctx.fillStyle="orange";
-    ctx.beginPath();
-    ctx.arc(b.x,b.y,b.size,0,Math.PI*2);
-    ctx.fill();
-  });
-}
-
 // === COLLISIONS ===
 function checkTrailCollision(){
   for(let i=0;i<trails.length;i++){
     const t = trails[i];
-    if(t.color === player.color) continue; // ignore own red trail
+    if(t.color === player.color) continue; 
     const dx = player.x - t.x;
     const dy = player.y - t.y;
     if(Math.sqrt(dx*dx+dy*dy) < 12){
@@ -185,10 +211,6 @@ function drawHUD(){
   ctx.fillStyle="white";
   ctx.font="24px Arial";
   ctx.fillText(`Score: ${score}`,20,40);
-  if(knockbackTimer>0){
-    ctx.fillStyle="yellow";
-    ctx.fillText("KNOCKBACK ACTIVE!", canvas.width/2-100, 40);
-  }
 }
 
 // === GAME LOOP ===
@@ -210,12 +232,13 @@ function gameLoop(){
 
   updateBots();
   drawBots();
-  drawBombs();
-  checkTrailCollision();
 
+  updateDiscs();
+  drawDiscs();
+
+  checkTrailCollision();
   drawHUD();
   score++;
-  if(knockbackTimer>0) knockbackTimer--;
 
   requestAnimationFrame(gameLoop);
 }
